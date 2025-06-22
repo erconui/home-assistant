@@ -1,0 +1,4 @@
+kitchen d0:73:d5:14:d9:d1
+bed d0:73:d5:14:bd:9a
+entryway d0:73:d5:2a:3d:92
+ceiling d0:73:d5:22:90:fa
