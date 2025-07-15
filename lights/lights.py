@@ -25,10 +25,8 @@ class Lights(hass.Hass):
     self.neutral = [26.743, 31.347]
     self.breached = [360,100,255]
     self.temp_alert = [272.932,100,255]
-    self.theater_lights = ['theater_fl', 'theater_fr', 'theater_cl', 'theater_cr', 'theater_bl', 'theater_br','stairs', 'headboard']
-    self.dumb_lights = ['theater_fl', 'theater_fr', 'theater_cl', 'theater_cr', 'theater_bl', 'theater_br','wiz1','wiz2','wiz3','wiz4','wiz5','wiz6','wiz7','wiz8']
-    self.smart_lights= ['floor', 'stairs','headboard','island','patio1','patio2']
-    self.kitchen_lights = ['floor','sliding_door_light', 'island', 'wiz1', 'wiz2', 'wiz3', 'wiz4', 'wiz5', 'wiz6', 'wiz7', 'wiz8', 'patio1', 'patio2']
+    
+    self.defineLights()
 
     self.commands = {'theater-on':False, 'theater-off':False, 'kitchen-on':False,'kitchen-off':False,'breach':False}
     thermostat = self.get_state('climate.orem_property')
@@ -37,10 +35,36 @@ class Lights(hass.Hass):
     self.listen_state(self.dance_stop, "input_boolean.dance", new="off")
     self.listen_state(self.room_toggle, "input_boolean.theater_lights")
     self.listen_state(self.room_toggle, "input_boolean.kitchen_lights")
+    self.listen_state(self.room_toggle, 'input_boolean.fae_lights')
+    self.listen_state(self.room_toggle, 'input_boolean.ocean_lights')
     self.listen_state(self.breach, "climate.orem_property")
     self.listen_state(self.breach, "input_boolean.dooropen")
     self.log("Lights initialized")
+    
+  def defineLights(self):
+    self.dumb_lights = ['theater_fl', 'theater_fr', 'theater_cl', 'theater_cr', 'theater_bl', 'theater_br',
+                        'wiz1','wiz2','wiz3','wiz4','wiz5','wiz6','wiz7','wiz8', 'bed1', 'bed2',
+                        'ocean1', 'ocean2', 'ocean3', 'ocean4']#wiz/tuya
+    self.smart_lights= ['headboard', 'floor', 'stairs', 'island', 'island1', 'island2', 'patio1', 'patio2', 'lantern', 'sconcel', 'sconcer'] #lifx/hue
+    self.semi_smart = ['hydralisk_right_eye', 'hydralisk_left_eye', 'hydralisk_right_jaw','hydralisk_left_jaw']#esphome
+    
+    #rooms
+    #self.theater_lights = ['theater_fl', 'theater_fr', 'theater_cl', 'theater_cr', 'theater_bl', 'theater_br','stairs', 'headboard']
+    #self.kitchen_lights = ['floor','sliding_door_light', 'island', 'wiz1', 'wiz2', 'wiz3', 'wiz4', 'wiz5', 'wiz6', 'wiz7', 'wiz8', 'patio1', 'patio2']
+    #self.fae_lights = ['bed1', 'bed2', 'lantern']
+    #self.ocean_lights = ['ocean1', 'ocean2', 'ocean3', 'ocean4', 'sconcel', 'sconcer']
 
+    self.theater_lights = self.dumb_lights[:6] + self.smart_lights[:2]
+    self.kitchen_lights = self.dumb_lights[6:14] + self.smart_lights[3:6]# + self.semi_smart
+    self.patio_lights = self.smart_lights[6:8]
+    self.fae_lights = self.dumb_lights[14:16] + [self.smart_lights[8]]
+    self.ocean_lights = self.dumb_lights[16:] + self.smart_lights[9:]
+    self.log('Initialized theater lights: ' + ', '.join(self.theater_lights))
+    self.log('Initialized kitchen lights: ' + ', '.join(self.kitchen_lights))
+    self.log('Initialized patio lights: ' + ', '.join(self.patio_lights))
+    self.log('Initialized fae lights: ' + ', '.join(self.fae_lights))
+    self.log('Initialized ocean lights: ' + ', '.join(self.ocean_lights))
+    
   def breach(self, entity, attribute, old, new, kwargs):
       # self.log(f"thermostat state {entity} {new}")
       door_open = self.get_state('input_boolean.dooropen')
@@ -84,11 +108,29 @@ class Lights(hass.Hass):
           self.commands[f"theater-{new}"] = True
           self.commands[f"theater-{old}"] = False
           self.commands['dance'] = False
-      else:
+      elif entity=='input_boolean.kitchen_lights':
            command=f"kitchen-{new}"
            lights = self.kitchen_lights
            self.commands[f"kitchen-{new}"] = True
            self.commands[f"kitchen-{old}"] = False
+           self.commands['dance'] = False
+      elif entity=='input_boolean.patio_lights':
+           command=f"patio-{new}"
+           lights = self.patio_lights
+           self.commands[f"patio-{new}"] = True
+           self.commands[f"patio-{old}"] = False
+           self.commands['dance'] = False
+      elif entity=='input_boolean.fae_lights':
+           command=f"fae-{new}"
+           lights = self.fae_lights
+           self.commands[f"fae-{new}"] = True
+           self.commands[f"fae-{old}"] = False
+           self.commands['dance'] = False
+      elif entity=='input_boolean.ocean_lights':
+           command=f"ocean-{new}"
+           lights = self.ocean_lights
+           self.commands[f"ocean-{new}"] = True
+           self.commands[f"ocean-{old}"] = False
            self.commands['dance'] = False
       for light in lights:
         # self.log(f"command is {command} {self.commands[command]}")
