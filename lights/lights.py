@@ -1,6 +1,7 @@
 import appdaemon.plugins.hass.hassapi as hass
 from random import randint
 from time import sleep
+from copy import deepcopy
 
 class Lights(hass.Hass):
 
@@ -16,11 +17,17 @@ class Lights(hass.Hass):
     self.log(f"thermostat state {thermostat}")
     #self.listen_state(self.dance_start, "input_boolean.dance", new="on")
     #self.listen_state(self.dance_stop, "input_boolean.dance", new="off")
+    #self.listen_state(self.room_toggle, "input_boolean.theater_lights")
+    #self.listen_state(self.room_toggle, "input_boolean.kitchen_lights")
+    #self.listen_state(self.room_toggle, 'input_boolean.fae_lights')
+    #self.listen_state(self.room_toggle, 'input_boolean.ocean_lights')
+
     self.listen_state(self.dance, "input_select.dance")
-    self.listen_state(self.room_toggle, "input_boolean.theater_lights")
-    self.listen_state(self.room_toggle, "input_boolean.kitchen_lights")
-    self.listen_state(self.room_toggle, 'input_boolean.fae_lights')
-    self.listen_state(self.room_toggle, 'input_boolean.ocean_lights')
+    for room in self.rooms:
+      toggle = f"input_boolean.{room}_lights"
+    #  self.log(toggle)
+      self.listen_state(self.room_toggle, toggle)
+      self.listen_state(self.room_toggle, f"input_number.{room}_brightness")
     self.listen_state(self.breach, "climate.orem_property")
     self.listen_state(self.breach, "input_boolean.dooropen")
     self.log("Lights initialized")
@@ -41,6 +48,8 @@ class Lights(hass.Hass):
       [344.927,85.881,48], # redish pink
       [90.117,100,64] # forest green
     ]
+    for idx in range(len(self.hsb)):
+      self.hsb[idx][-1] /= .5
     self.neutral = [26.743, 31.347]
     self.breached = [360,100,255]
     self.temp_alert = [272.932,100,255]
@@ -103,6 +112,10 @@ class Lights(hass.Hass):
   def room_toggle(self, entity, attribute, old, new, kwargs):
       room = entity.split('.')[1].split('_')[0]
       self.log(f"Toggling lights for {room} {old}->{new} {room in self.rooms}")
+      if 'brightness' in entity:
+        if self.get_state(f"input_boolean.{room}_lights") == 'on' and not self.commands['dance'] in (room,'full'):
+          new = 'on'
+        else: return
       percentage = 100
       if room in self.rooms:
         command=f"{room}-{new}"
@@ -128,10 +141,12 @@ class Lights(hass.Hass):
                 hs_old = [light_state['attributes']['hs_color'][0],
                          light_state['attributes']['hs_color'][1]]
             brightness_old = light_state['attributes']['brightness']
+        brightness=int(256*percentage) if new=='on' else 0
+        if light.startswith('bed') and brightness > 0: brightness = max(26, brightness)
         if hs_old is None:
             self.update_light(light, percent=0, total_duration=3, dur=.1,
                               color_temp=238, color_temp_old=color_temp_old,
-                              brightness=int(256*percentage) if new=='on' else 0, brightness_old=brightness_old,
+                              brightness=brightness, brightness_old=brightness_old,
                               command=command)
         else:
             self.update_light(light, percent=0, total_duration=3, dur=.1,
@@ -166,6 +181,10 @@ class Lights(hass.Hass):
       else:
           self.log('off')
           self.commands['dance'] = "none"
+      for room in self.rooms:
+        if new != room:
+          for light in self.rooms[room]:
+            self.light_active[light] = False
 
   def wrap_hue(self, hue_old, hue_next):
     hue_diff = hue_next - hue_old
@@ -176,7 +195,13 @@ class Lights(hass.Hass):
         hue_diff = (hue_old - hue_next) - 360
     return hue_diff
 
+  def ceil(self, val):
+    if val > 0: return max(1,val)
+    else: return min(-1,val)
+
   def update_light(self, light_id, **kwargs):
+    if light_id in self.dumb and self.light_active[light_id] == False:
+      return
     light_state = self.get_state(f"light.{light_id}", attribute='all')
     if light_state['state'] == 'unavailable':
       if 'stale_count' not in kwargs:
@@ -207,8 +232,9 @@ class Lights(hass.Hass):
       total_diff = (self.wrap_hue(kwargs['hs_old'][0],kwargs['hs'][0])**2 + (kwargs['hs'][1] - kwargs['hs_old'][1])**2)**.5
       if total_diff > 0 and light_state['state'] == 'on':
         diff = (self.wrap_hue(light_state['attributes']['hs_color'][0],kwargs['hs_old'][0])**2 + (kwargs['hs_old'][1] - light_state['attributes']['hs_color'][1]))**.5
-        percent = min(percent, diff/total_diff+kwargs['dur']/kwargs['total_duration'])
-      hass_kwargs['hs_color'] = [(kwargs['hs_old'][0] + self.wrap_hue(kwargs['hs_old'][0],kwargs['hs'][0])*percent)%360,
+        #percent = diff/total_diff+kwargs['dur']/kwargs['total_duration']
+      hue_change = self.wrap_hue(kwargs['hs_old'][0],kwargs['hs'][0])*percent
+      hass_kwargs['hs_color'] = [(kwargs['hs_old'][0] + hue_change)%360,
                                  kwargs['hs_old'][1] + (kwargs['hs'][1] - kwargs['hs_old'][1])*percent]
     elif 'hs' in kwargs: hass_kwargs['hs_color'] = kwargs['hs']
     if 'rgb_old' in kwargs:
@@ -217,27 +243,29 @@ class Lights(hass.Hass):
         diff = ((light_state['attributes']['rgb'][0] - kwargs['rgb_old'][0])**2 + 
                 (light_state['attributes']['rgb'][1] - kwargs['rgb_old'][1])**2 + 
                 (light_state['attributes']['rgb'][2] - kwargs['rgb_old'][2])**2)**.5
-        percent = min(percent, diff/total_diff+kwargs['dur']/kwargs['total_duration'])
+        #percent = diff/total_diff+kwargs['dur']/kwargs['total_duration']
       hass_kwargs['rgb_color'] = [kwargs['rgb_old'][0] + (kwargs['rgb'][0] - kwargs['rgb_old'][0])*percent,
-                                  kwargs['rgb_old'][1] + (kwargs['rgb'][1] - kwargs['rgb_old'][1])*percent,
+                                  kwargs['rgb_old'][1] + s(kwargs['rgb'][1] - kwargs['rgb_old'][1])*percent,
                                   kwargs['rgb_old'][2] + (kwargs['rgb'][2] - kwargs['rgb_old'][2])*percent]
     elif 'rgb' in kwargs: hass_kwargs['rgb_color'] = kwargs['rgb']
     if 'color_temp_old' in kwargs:
       total_diff = (kwargs['color_temp'] - kwargs['color_temp_old'])
-      if total_diff > 0 and light_state['state'] == 'on':
-        percent = min(percent, (light_state['attributes']['color_temp'] - kwargs['color_temp_old']) / total_diff+kwargs['dur']/kwargs['total_duration'])
+      #if total_diff > 0 and light_state['state'] == 'on':
+      #  percent = (light_state['attributes']['color_temp'] - kwargs['color_temp_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
       hass_kwargs['color_temp'] = kwargs['color_temp_old'] + (kwargs['color_temp'] - kwargs['color_temp_old'])*percent
     elif 'color_temp' in kwargs: hass_kwargs['color_temp'] = kwargs['color_temp']
     if 'brightness_old' in kwargs:
       total_diff = (kwargs['brightness'] - kwargs['brightness_old'])
       if total_diff > 0 and light_state['state'] == 'on':
-        percent = min(percent, (light_state['attributes']['brightness'] - kwargs['brightness_old']) / total_diff+kwargs['dur']/kwargs['total_duration'])
+        #percent = (light_state['attributes']['brightness'] - kwargs['brightness_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
+        self.log(f"TESTESTESTETSE {light_id} {percent} {kwargs['brightness_old']} -> {light_state['attributes']['brightness']} -> {kwargs['brightness']}")
       hass_kwargs['brightness'] = kwargs['brightness_old'] + (kwargs['brightness'] - kwargs['brightness_old'])*percent
+      self.log(f"commanded {light_id} {hass_kwargs['brightness']}")
     elif 'brightness' in kwargs: hass_kwargs['brightness'] = kwargs['brightness']
 
     if 'dur' in kwargs:
       hass_kwargs['transition'] = kwargs['dur']
-      kwargs['percent'] = percent
+      #kwargs['percent'] = percent
       if kwargs['percent'] < 1:
         kwargs['percent'] += kwargs['dur']/kwargs['total_duration']
         kwargs['percent'] = min(1,kwargs['percent'])
@@ -286,7 +314,7 @@ class Lights(hass.Hass):
               #if light_id == 'moon':
               #    color_next[-1] = 80 + randint(0,30)
               if light_id == 'sconcer' or light_id == 'sconcel': 
-                  color_next[-1] = 100 + randint(0,30)
+                  color_next[-1] = 200 + randint(0,30)
               if light_id.startswith('edison'):
                   color_next[-1] *= .6
               #if light_id == 'theaterbr': color_next[-1] *= 2.0
