@@ -122,7 +122,8 @@ class Lights(hass.Hass):
         lights = self.rooms[room]
         self.commands[f"{room}-{new}"] = True
         self.commands[f"{room}-{new}"] = True
-        if self.commands['dance'] in (room,'full'): self.commands['dance'] = 'none'
+        if self.commands['dance'] in (room,'full'):
+          self.commands['dance'] = 'none'
         percentage = float(self.get_state(f"input_number.{room}_brightness")) / 100.
         self.log(f"Percentage: {percentage}")
 
@@ -144,12 +145,12 @@ class Lights(hass.Hass):
         brightness=int(256*percentage) if new=='on' else 0
         if light.startswith('bed') and brightness > 0: brightness = max(26, brightness)
         if hs_old is None:
-            self.update_light(light, percent=0, total_duration=3, dur=.1,
+            self.startUpdate(light, percent=0, total_duration=3, dur=.1,
                               color_temp=238, color_temp_old=color_temp_old,
                               brightness=brightness, brightness_old=brightness_old,
                               command=command)
         else:
-            self.update_light(light, percent=0, total_duration=3, dur=.1,
+            self.startUpdate(light, percent=0, total_duration=3, dur=.1,
                     color_temp=238,
                     brightness=int(256*percentage) if new=='on' else 0,
                     brightness_old=brightness_old, command=command)
@@ -208,71 +209,103 @@ class Lights(hass.Hass):
     if kwargs['stale_count'] < 30:
       self.run_in(lambda _: self.update_light(light_id, **kwargs), kwargs['dur'])
     return False
-    
   
+  def updateSmartLight(self, light_id, **kwargs):
+    hass_kwargs = {'entity_id': f"light.{light_id}"}
+    if 'hs' in kwargs: hass_kwargs['hs_color'] = kwargs['hs']
+    if 'rgb' in kwargs: hass_kwargs['rgb_color'] = kwargs['rgb']
+    if 'color_temp' in kwargs: hass_kwargs['color_temp'] = kwargs['color_temp']
+    if 'brightness' in kwargs: hass_kwargs['brightness'] = kwargs['brightness']
+    if 'total_duration' in kwargs: hass_kwargs['transition'] = kwargs['total_duration']
+    self.turn_on(**hass_kwargs)
+  
+  def setHS(self, current, percent, hass_kwargs, new, old):
+    if old is None:
+      hass_kwargs['hs_color'] = new
+      return
+    #total_diff = (self.wrap_hue(kwargs['hs_old'][0],kwargs['hs'][0])**2 + (kwargs['hs'][1] - kwargs['hs_old'][1])**2)**.5
+    #if total_diff > 0 and light_state['state'] == 'on':
+    #  diff = (self.wrap_hue(current['hs_color'][0],kwargs['hs_old'][0])**2 + (kwargs['hs_old'][1] - current['hs_color'][1]))**.5
+    #  percent = diff/total_diff+kwargs['dur']/kwargs['total_duration']
+    hue_change = self.wrap_hue(old[0],new[0])*percent
+    hass_kwargs['hs_color'] = [(old[0] + hue_change)%360,
+                               old[1] + (new[1] - old[1])*percent]
+
+  def setRGB(self, current, percent, hass_kwargs, new, old):
+    if old is None:
+      hass_kwargs['rgb_color'] = new
+      return
+    #total_diff = ((kwargs['rgb'][0] - kwargs['rgb_old'][0])**2 + (kwargs['rgb'][1] - kwargs['rgb_old'][1])**2 + (kwargs['rgb'][2] - kwargs['rgb_old'][2])**2)**.5
+    #if total_diff > 0 and light_state['state'] == 'on':
+    #  diff = ((current['rgb'][0] - kwargs['rgb_old'][0])**2 + 
+    #          (current['rgb'][1] - kwargs['rgb_old'][1])**2 + 
+    #          (current['rgb'][2] - kwargs['rgb_old'][2])**2)**.5
+    #  percent = diff/total_diff+kwargs['dur']/kwargs['total_duration']
+    hass_kwargs['rgb_color'] = [old[0] + (new[0] - old[0])*percent,
+                                old[1] + (new[1] - old[1])*percent,
+                                old[2] + (new[2] - old[2])*percent]
+  
+  def setTemp(self, current, percent, hass_kwargs, new, old):
+    if old is None:
+      hass_kwargs['color_temp'] = new
+      return
+    #total_diff = (kwargs['color_temp'] - kwargs['color_temp_old'])
+    #if total_diff > 0 and light_state['state'] == 'on':
+    #  percent = (light_state['attributes']['color_temp'] - kwargs['color_temp_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
+    hass_kwargs['color_temp'] = old + (new - old)*percent
+  
+  def setBrightness(self, current, percent, hass_kwargs, new, old):
+    if old is None:
+      hass_kwargs['brightness'] = new
+      return
+    #total_diff = (kwargs['brightness'] - kwargs['brightness_old'])
+    #if total_diff > 0 and light_state['state'] == 'on':
+      #percent = (light_state['attributes']['brightness'] - kwargs['brightness_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
+      #self.log(f"TESTESTESTETSE {light_id} {percent} {kwargs['brightness_old']} -> {light_state['attributes']['brightness']} -> {kwargs['brightness']}")
+    hass_kwargs['brightness'] = old + (new - old)*percent
+    #self.log(f"commanded {light_id} {hass_kwargs['brightness']}")
+  
+  def startUpdate(self, light_id, **kwargs):
+    if self.light_active[light_id]:
+      self.light_active[light_id] = False
+      self.run_in(lambda _: self.startUpdate(light_id, **kwargs), self.step*2)
+    else:
+      self.light_active[light_id] = light_id in self.dumb
+      self.update_light(light_id, **kwargs)
 
   def update_light(self, light_id, **kwargs):
     light_state = self.get_state(f"light.{light_id}", attribute='all')
     light_attributes = light_state['attributes']
-    hslog = f" HS: {light_state['attributes']['hs_color']}->{kwargs['hs_color']}" if 'hs_color' in kwargs else ""
-    templog = f" TEMP: {light_state['attributes']['color_temp']}->{kwargs['color_temp']}" if 'color_temp' in kwargs else ""
+    connected = light_state['state'] != 'Unavailable'
+    hslog = ""
+    templog = ""
+    brightlog = ""
+    if connected and 'hs' in kwargs and 'hs_color' in light_attributes: hslog = f" HS: {light_attributes['hs_color']}->{kwargs['hs']}"
+    if connected and 'color_temp' in kwargs and 'color_temp' in light_attributes: templog = f" TEMP: {light_attributes['color_temp']}->{kwargs['color_temp']}"
+    if connected and 'brightness' in kwargs and 'brightness' in light_attributes: brightlog = f" Brightness: {light_attributes['brightness']}->{kwargs['brightness']}"
     self.log(f"Update {light_id}: {'Active' if self.light_active[light_id] else 'Exit'}" +
-             f" {'Unavailable' if light_state['state'] == 'Unavailable' else 'Connected'}" +
-             f" Percent: {kwargs['percent']}%{hslog}{templog}"
-             f" Brightness: {light_state['attributes']['brightness']}->{kwargs['brightness']}")
-    if light_id in self.dumb and self.light_active[light_id] == False:
-      return
+             f" {'Connected' if connected else 'Unavailable'}" +
+             f" Percent: {kwargs['percent']}%{hslog}{templog}{brightlog}")
+
+    if light_id in self.dumb and self.light_active[light_id] == False: return
     if not self.isAvailable(light_id, light_state['state'], **kwargs): return
-
-    if light_state['state'] == 'off' and kwargs['brightness'] == 0:
+    if light_state['state'] == 'off' and kwargs['brightness'] == 0: return # TODO convert to function that checks if all attributes are already what they're assigned
+    if not self.commands[kwargs['command']]: return
+    
+    if light_id in self.smart:
+      self.updateSmartLight(light_id, **kwargs)
       return
 
-    if not self.commands[kwargs['command']]: return
     hass_kwargs = {'entity_id': f"light.{light_id}"}
-    if light_id in self.smart:
-        if 'hs' in kwargs: hass_kwargs['hs_color'] = kwargs['hs']
-        if 'rgb' in kwargs: hass_kwargs['rgb_color'] = kwargs['rgb']
-        if 'color_temp' in kwargs: hass_kwargs['color_temp'] = kwargs['color_temp']
-        if 'brightness' in kwargs: hass_kwargs['brightness'] = kwargs['brightness']
-        if 'total_duration' in kwargs: hass_kwargs['transition'] = kwargs['total_duration']
-        self.turn_on(**hass_kwargs)
-        return
-
     percent = kwargs['percent']
-    if 'hs_old' in kwargs:
-      total_diff = (self.wrap_hue(kwargs['hs_old'][0],kwargs['hs'][0])**2 + (kwargs['hs'][1] - kwargs['hs_old'][1])**2)**.5
-      if total_diff > 0 and light_state['state'] == 'on':
-        diff = (self.wrap_hue(light_state['attributes']['hs_color'][0],kwargs['hs_old'][0])**2 + (kwargs['hs_old'][1] - light_state['attributes']['hs_color'][1]))**.5
-        #percent = diff/total_diff+kwargs['dur']/kwargs['total_duration']
-      hue_change = self.wrap_hue(kwargs['hs_old'][0],kwargs['hs'][0])*percent
-      hass_kwargs['hs_color'] = [(kwargs['hs_old'][0] + hue_change)%360,
-                                 kwargs['hs_old'][1] + (kwargs['hs'][1] - kwargs['hs_old'][1])*percent]
-    elif 'hs' in kwargs: hass_kwargs['hs_color'] = kwargs['hs']
-    if 'rgb_old' in kwargs:
-      total_diff = ((kwargs['rgb'][0] - kwargs['rgb_old'][0])**2 + (kwargs['rgb'][1] - kwargs['rgb_old'][1])**2 + (kwargs['rgb'][2] - kwargs['rgb_old'][2])**2)**.5
-      if total_diff > 0 and light_state['state'] == 'on':
-        diff = ((light_state['attributes']['rgb'][0] - kwargs['rgb_old'][0])**2 + 
-                (light_state['attributes']['rgb'][1] - kwargs['rgb_old'][1])**2 + 
-                (light_state['attributes']['rgb'][2] - kwargs['rgb_old'][2])**2)**.5
-        #percent = diff/total_diff+kwargs['dur']/kwargs['total_duration']
-      hass_kwargs['rgb_color'] = [kwargs['rgb_old'][0] + (kwargs['rgb'][0] - kwargs['rgb_old'][0])*percent,
-                                  kwargs['rgb_old'][1] + s(kwargs['rgb'][1] - kwargs['rgb_old'][1])*percent,
-                                  kwargs['rgb_old'][2] + (kwargs['rgb'][2] - kwargs['rgb_old'][2])*percent]
-    elif 'rgb' in kwargs: hass_kwargs['rgb_color'] = kwargs['rgb']
-    if 'color_temp_old' in kwargs:
-      #total_diff = (kwargs['color_temp'] - kwargs['color_temp_old'])
-      #if total_diff > 0 and light_state['state'] == 'on':
-      #  percent = (light_state['attributes']['color_temp'] - kwargs['color_temp_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
-      hass_kwargs['color_temp'] = kwargs['color_temp_old'] + (kwargs['color_temp'] - kwargs['color_temp_old'])*percent
-    elif 'color_temp' in kwargs: hass_kwargs['color_temp'] = kwargs['color_temp']
-    if 'brightness_old' in kwargs:
-      total_diff = (kwargs['brightness'] - kwargs['brightness_old'])
-      #if total_diff > 0 and light_state['state'] == 'on':
-        #percent = (light_state['attributes']['brightness'] - kwargs['brightness_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
-        #self.log(f"TESTESTESTETSE {light_id} {percent} {kwargs['brightness_old']} -> {light_state['attributes']['brightness']} -> {kwargs['brightness']}")
-      hass_kwargs['brightness'] = kwargs['brightness_old'] + (kwargs['brightness'] - kwargs['brightness_old'])*percent
-      #self.log(f"commanded {light_id} {hass_kwargs['brightness']}")
-    elif 'brightness' in kwargs: hass_kwargs['brightness'] = kwargs['brightness']
+    if 'hs' in kwargs:
+      self.setHS(light_state['attributes'], percent, hass_kwargs, kwargs['hs'],kwargs['hs_old'] if 'hs_old' in kwargs else None)
+    if 'rgb' in kwargs:
+      self.setRGB(light_state['attributes'], percent, hass_kwargs, kwargs['rgb'],kwargs['rgb_old'] if 'rgb_old' in kwargs else None)
+    if 'color_temp' in kwargs:
+      self.setTemp(light_state['attributes'], percent, hass_kwargs, kwargs['color_temp'],kwargs['color_temp_old'] if 'color_temp_old' in kwargs else None)
+    if 'brightness' in kwargs:
+      self.setBrightness(light_state['attributes'], percent, hass_kwargs, kwargs['brightness'], kwargs['brightness_old'] if 'brightness_old' in kwargs else None)
 
     if 'dur' in kwargs:
       hass_kwargs['transition'] = kwargs['dur']
@@ -298,7 +331,7 @@ class Lights(hass.Hass):
           idx = randint(0,len(self.hsb)-1)
           color_next = self.hsb[idx]
       self.log(f"change {light_id} color {color_old} -> {color_next}")
-      self.update_light(light_id,
+      self.startUpdate(light_id,
         hs_old=(color_old[0],color_old[1]), hs=(color_next[0],color_next[1]),
         brightness=color_next[2], brightness_old=color_old[2],
         percent=0, dur=self.step, total_duration=duration, command=command)
@@ -337,7 +370,7 @@ class Lights(hass.Hass):
               percentage = float(self.get_state(f"input_number.{room}_brightness")) / 100.
               color_next[-1] = int(color_next[-1] * percentage)# int(percentage*3/100.)
               self.log(f"Next color {light_id} {color_old} -> {color_next} in {duration}s")
-              self.update_light(light_id,
+              self.startUpdate(light_id,
                 hs_old=(color_old[0],color_old[1]), hs=(color_next[0],color_next[1]),
                 brightness=color_next[2], brightness_old=color_old[2],
                 percent=0, dur=self.step, total_duration=duration, command='dance')
