@@ -175,9 +175,6 @@ class Lights(hass.Hass):
             for name in self.rooms:
               self.light_active[name] = False
               self.color_change_random(name, room, 30)
-          #for name in self.dumb + self.smart + self.semi_smart:
-          #    self.log(name)
-          #    self.color_change_random(name, 30)
       else:
           self.log('off')
           self.commands['dance'] = "none"
@@ -199,23 +196,37 @@ class Lights(hass.Hass):
     if val > 0: return max(1,val)
     else: return min(-1,val)
 
+  def isAvailable(self, light_id, state, **kwargs):
+    if state != 'unavailable':
+      kwargs.pop('stale_count', None)
+      return True
+    
+    if 'stale_count' not in kwargs:
+      kwargs['stale_count'] = 1
+    else:
+      kwargs['stale_count'] += 1
+    if kwargs['stale_count'] < 30:
+      self.run_in(lambda _: self.update_light(light_id, **kwargs), kwargs['dur'])
+    return False
+    
+  
+
   def update_light(self, light_id, **kwargs):
+    light_state = self.get_state(f"light.{light_id}", attribute='all')
+    light_attributes = light_state['attributes']
+    hslog = f" HS: {light_state['attributes']['hs_color']}->{kwargs['hs_color']}" if 'hs_color' in kwargs else ""
+    templog = f" TEMP: {light_state['attributes']['color_temp']}->{kwargs['color_temp']}" if 'color_temp' in kwargs else ""
+    self.log(f"Update {light_id}: {'Active' if self.light_active[light_id] else 'Exit'}" +
+             f" {'Unavailable' if light_state['state'] == 'Unavailable' else 'Connected'}" +
+             f" Percent: {kwargs['percent']}%{hslog}{templog}"
+             f" Brightness: {light_state['attributes']['brightness']}->{kwargs['brightness']}")
     if light_id in self.dumb and self.light_active[light_id] == False:
       return
-    light_state = self.get_state(f"light.{light_id}", attribute='all')
-    if light_state['state'] == 'unavailable':
-      if 'stale_count' not in kwargs:
-        kwargs['stale_count'] = 1
-      else:
-        kwargs['stale_count'] += 1
-      if kwargs['stale_count'] < 30:
-        self.run_in(lambda _: self.update_light(light_id, **kwargs), kwargs['dur'])
-      return
-    else: kwargs.pop('stale_count', None)
-    self.log(f"{light_id} attributes {light_state}")
+    if not self.isAvailable(light_id, light_state['state'], **kwargs): return
+
     if light_state['state'] == 'off' and kwargs['brightness'] == 0:
       return
-    self.log(kwargs)
+
     if not self.commands[kwargs['command']]: return
     hass_kwargs = {'entity_id': f"light.{light_id}"}
     if light_id in self.smart:
@@ -249,18 +260,18 @@ class Lights(hass.Hass):
                                   kwargs['rgb_old'][2] + (kwargs['rgb'][2] - kwargs['rgb_old'][2])*percent]
     elif 'rgb' in kwargs: hass_kwargs['rgb_color'] = kwargs['rgb']
     if 'color_temp_old' in kwargs:
-      total_diff = (kwargs['color_temp'] - kwargs['color_temp_old'])
+      #total_diff = (kwargs['color_temp'] - kwargs['color_temp_old'])
       #if total_diff > 0 and light_state['state'] == 'on':
       #  percent = (light_state['attributes']['color_temp'] - kwargs['color_temp_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
       hass_kwargs['color_temp'] = kwargs['color_temp_old'] + (kwargs['color_temp'] - kwargs['color_temp_old'])*percent
     elif 'color_temp' in kwargs: hass_kwargs['color_temp'] = kwargs['color_temp']
     if 'brightness_old' in kwargs:
       total_diff = (kwargs['brightness'] - kwargs['brightness_old'])
-      if total_diff > 0 and light_state['state'] == 'on':
+      #if total_diff > 0 and light_state['state'] == 'on':
         #percent = (light_state['attributes']['brightness'] - kwargs['brightness_old']) / total_diff+kwargs['dur']/kwargs['total_duration']
-        self.log(f"TESTESTESTETSE {light_id} {percent} {kwargs['brightness_old']} -> {light_state['attributes']['brightness']} -> {kwargs['brightness']}")
+        #self.log(f"TESTESTESTETSE {light_id} {percent} {kwargs['brightness_old']} -> {light_state['attributes']['brightness']} -> {kwargs['brightness']}")
       hass_kwargs['brightness'] = kwargs['brightness_old'] + (kwargs['brightness'] - kwargs['brightness_old'])*percent
-      self.log(f"commanded {light_id} {hass_kwargs['brightness']}")
+      #self.log(f"commanded {light_id} {hass_kwargs['brightness']}")
     elif 'brightness' in kwargs: hass_kwargs['brightness'] = kwargs['brightness']
 
     if 'dur' in kwargs:
@@ -271,7 +282,7 @@ class Lights(hass.Hass):
         kwargs['percent'] = min(1,kwargs['percent'])
         self.run_in(lambda _: self.update_light(light_id, **kwargs), kwargs['dur'])
       else: self.light_active[light_id] = False
-    self.log(f"Check {light_id} {hass_kwargs}")
+    #self.log(f"Check {light_id} {hass_kwargs}")
     self.turn_on(**hass_kwargs)
 
   def color_change(self, light_id, duration, color_next=None, command=None):
